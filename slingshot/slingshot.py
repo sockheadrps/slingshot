@@ -21,8 +21,33 @@ import win32process
 import psutil
 import queue
 import msvcrt
+import os
+import dotenv
 
-base_path = Path("C:/Users/a123d/scripts/slingshot")
+
+
+console = Console()
+
+# Index for the currently selected directory
+selected_index = 0
+
+# Debounce delay for key press handling
+DEBOUNCE_DELAY = 0.1
+last_press_time = 0
+
+selected = []
+index = 0
+page = 0
+option_key = False
+directory_index = 0
+selected_panel = None
+option_index = 0
+show_help = False
+
+
+dotenv.load_dotenv()
+
+base_path = Path(os.getenv("BASE_DIR"))
 # Path to storage.json
 STORAGE_PATH = base_path / "slingshot_storage.json"
 
@@ -44,25 +69,9 @@ def write_output_to_file(output):
         f.write(output)
 
 
-console = Console()
 
-# Index for the currently selected directory
-selected_index = 0
 
-# Debounce delay for key press handling
-DEBOUNCE_DELAY = 0.1
-last_press_time = 0
 
-selected = []
-index = 0
-page = 0
-option_key = False
-directory_index = 0
-selected_panel = None
-
-def flush_input():
-    while msvcrt.kbhit():
-        msvcrt.getch()
 
 def load_directories():
     """Load saved directories from storage."""
@@ -99,7 +108,7 @@ def load_terminal_commands():
 def save_terminal_commands(command):
     with open(STORAGE_PATH, "r") as f:
         data = json.load(f)
-    
+
     with open(STORAGE_PATH, "w") as f:
         if isinstance(command, list):
             data["commands"] = command
@@ -182,7 +191,7 @@ def create_key_handler(key_queue):
     """Create a key handler with access to the key queue."""
     def on_press(key):
         """Handle key press events and update selection."""
-        global selected_index, last_press_time
+        global selected_index, last_press_time, show_help
 
         try:
             if not hasattr(on_press, 'last_press'):
@@ -209,8 +218,12 @@ def create_key_handler(key_queue):
                     key_queue.put('enter')
                 elif key == keyboard.Key.space:
                     key_queue.put('space')
+                elif key == keyboard.Key.delete:
+                    key_queue.put('delete')
                 elif key == keyboard.KeyCode.from_char('a'):
                     key_queue.put('a')
+                elif key == keyboard.KeyCode.from_char('h'):
+                    key_queue.put('h')
 
                 on_press.last_press = current_time
 
@@ -234,21 +247,21 @@ def listen_for_arrow_keys(key_queue):
 
 
 def generate_directory_list(index, selection_made):
-    global selected_panel
+    global selected_panel, page, selected_panel, selected_index
     directories = load_directories()  # Load the list of directories
     selected_style = rich.style.Style(color="cyan")
     unselected_style = rich.style.Style(dim=True)
     directory_table = Table(
         show_header=False,
-        style=selected_style,
-        show_edge=True,
-        expand=True
+        expand=True,
+        show_edge=False,
+
     )
 
     # Add rows to the navigation panel
     selected_dir = None
     for i, directory in enumerate(directories):
-        if i == index and selected_panel == 0:  
+        if i == index and selected_panel == 0:
             if selection_made:
                 selected_dir = directory['directory']
             directory_table.add_row(
@@ -264,17 +277,28 @@ def generate_directory_list(index, selection_made):
     directory_panel = Panel(
         directory_table,
         title="Directories",
-        box=rich.box.SIMPLE_HEAD,
-        border_style="dim",
+        box=rich.box.ROUNDED,
+        border_style="cyan",
         expand=True,
         padding=1
     )
+
+    if page == 0:
+        if selected_panel == 0 and len(selected) == 0:
+            directory_panel.border_style = "cyan"
+        elif selected_panel == 0 and len(selected) > 0:
+            directory_panel.border_style = "cyan"
+        elif index == 0 and selected_panel == None and len(selected) != 0:
+            directory_panel.border_style = "magenta"
+        else:
+            directory_panel.border_style = "dim"
 
     return directory_panel, selected_dir
 
 
 def generate_final_command_panel(selection_made):
     global index, directory_index
+    print(f"directory_index: {directory_index}")
 
     directories = load_directories()  # Load the list of directories
     selected_style = rich.style.Style(color="cyan")
@@ -337,12 +361,12 @@ def generate_post_command_panel(index, selection_made):
 
     # Add rows to the navigation panel
     selected_command = None
-    
+
     # Calculate number of columns needed
     num_commands = len(commands)
     items_per_column = 8
     num_columns = (num_commands + items_per_column - 1) // items_per_column
-    
+
     # Create list to hold cells for each row
     for row in range(items_per_column):
         cells = []
@@ -353,12 +377,14 @@ def generate_post_command_panel(index, selection_made):
                 if idx == index:  # Highlight the current index
                     if selection_made:
                         selected_command = command
-                    cells.append(rich.text.Text(f"> {command}", style=selected_style))
+                    cells.append(rich.text.Text(
+                        f"> {command}", style=selected_style))
                 else:
-                    cells.append(rich.text.Text(f"  {command}", style=unselected_style))
+                    cells.append(rich.text.Text(
+                        f"  {command}", style=unselected_style))
             else:
                 cells.append(rich.text.Text(""))
-                
+
         directory_panel.add_row(*cells)
 
     return directory_panel, selected_command
@@ -376,24 +402,35 @@ def generate_command_panel():
     Returns:
         rich.Panel: The generated command panel.
     """
-    global selected, index, page, option_key, selected_panel, index
+    global selected, index, page, option_key, selected_panel, index, option_index
+
     if len(selected) > 0:
-        command_text = Text(
-            f"cd {selected[0]} {' '.join(selected[1:])}",
-            style='green' if index == 0 else 'dim green'
-        )
+        command_table = Table(
+            show_header=False, box=rich.box.SIMPLE_HEAD, style="dim", show_edge=True)
+        cells = []
+        for i, item in enumerate(selected):
+            style = 'cyan' if option_index == i else ''
+            cells.append(Text(item, style=style))
+        command_table.add_row(*cells)
+
         command_panel = Panel(
-            command_text,
+            command_table,
             title="Command Panel",
-            border_style="green" if selected_panel == 1 else "dim green",
-            box=rich.box.SIMPLE_HEAD,
+            border_style="cyan",
+            box=rich.box.ROUNDED,
         )
+        if page == 0:
+            if index == 1 and selected_panel is None:
+                command_panel.border_style = "magenta"
+            elif selected_panel == 1:
+                command_panel.border_style = "cyan"
+            else:
+                command_panel.border_style = "dim"
     else:
         if page == 0 and not selected_panel:
-            command_panel = Panel(  
+            command_panel = Panel(
                 "Waiting for selection...",
                 title="Command Panel",
-                border_style="green" if index == 1 else "dim green",
                 box=rich.box.SIMPLE_HEAD,
             )
         else:
@@ -406,54 +443,89 @@ def generate_command_panel():
     return command_panel
 
 
-
 def generate_rich_interface(selection_made):
-    global selected, index, page, option_key, selected_panel
+    global selected, index, page, option_key, selected_panel, show_help, directory_index
 
     sub_panel = None
     command_panel = None
-    print(f"selected_panel: {selected_panel}")
+    # print(f"selected_panel: {selected_panel} selection_made: {selection_made}")
 
     # Handle page panels
     if page == 0:
         # Populate the first panel with directories but don't allow interaction until selected
-        sub_panel, _ = generate_directory_list(index, selection_made)
+        command_panel = generate_command_panel()
         if selection_made:
             if selected_panel is None:
                 selected_panel = index
                 index = 0
                 selection_made = False
+        elif len(selected) == 0:
+            selected_panel = 0
+            sub_panel, _ = generate_directory_list(index, selection_made)
+        elif len(selected) > 0:
+            sub_panel, _ = generate_directory_list(index, selection_made)
+
         if selected_panel == 0:
-            sub_panel, selected_dir = generate_directory_list(index, selection_made)
+            sub_panel, selected_dir = generate_directory_list(
+                index, selection_made)
             if selection_made:
                 selected.append(selected_dir)
+                directory_index = index
                 index = 0  # Reset index for the next panel
                 page = 1  # Move to the next page
+                selected_panel = None
         elif selected_panel == 1:
             command_panel = generate_command_panel()
 
     elif page == 1 and len(selected) > 0:
-        sub_panel, selected_command = generate_post_command_panel(index, selection_made)
+        sub_panel, selected_command = generate_post_command_panel(
+            index, selection_made)
         if selection_made:
             selected.append(selected_command)
-            selected_panel = index
+            # selected_panel = index
             index = 0
 
     elif page == 2 and len(selected) > 0:
-        sub_panel, selected_command = generate_final_command_panel(selection_made)
+        sub_panel, selected_command = generate_final_command_panel(
+            selection_made)
         if option_key == "a":
             return
         if selection_made and not option_key == "a":
             selected.append(selected_command)
-            selected_panel = index
+            # selected_panel = index
             index = 0
 
-    # Generate the command panel using the helper function
+    # Generate the command panel using the helper function on any page
     if command_panel is None:
         command_panel = generate_command_panel()
 
+    current_page_style = rich.style.Style(color="cyan", italic=True)
+    other_page_style = rich.style.Style(dim=True, italic=True)
+    pages = {
+        0: "Directories",
+        1: "General Commands",
+        2: "Custom Commands"
+    }
+
+    # Create a table to hold the pages text with different colors based on current page
+    pages_table = Table(show_header=False, show_edge=False, expand=True)
+
+    page_texts = []
+    for page_num, page_text in pages.items():
+        if page_num == page:
+            page_texts.append(Text(page_text, style=current_page_style))
+        else:
+            page_texts.append(Text(page_text, style=other_page_style))
+
+    pages_table.add_row(Align.center(Text(" | ").join(page_texts)))
+
+    page_panel = Panel(
+        pages_table,
+        box=rich.box.SIMPLE_HEAD,
+    )
+
     # Help Panel
-    help_command_style = rich.style.Style(color="magenta", underline=True)
+    help_command_style = rich.style.Style(underline=True, dim=True)
     left_right = Align.center("← →", style=help_command_style)
     up_down = Align.center("↑ ↓", style=help_command_style)
     enter = Align.center("Enter", style=help_command_style)
@@ -466,16 +538,27 @@ def generate_rich_interface(selection_made):
     space_action = Align.center("Select option")
     a_action = Align.center("Add custom command")
 
+   # Help text aligned at the bottom
+    help_text = Align.center(Text("press h to show help", style="dim italic"))
+
+    # Help table aligned at the bottom
     help_table = Table(
         show_header=False,
         show_edge=True,
         expand=True,
         box=rich.box.ROUNDED,
-        border_style="magenta",
+        style="dim"
     )
     help_table.add_row(left_right, up_down, enter, space, a)
-    help_table.add_row(left_right_action, up_down_action, enter_action, space_action, a_action)
-    help_panel = Panel(help_table, title="Help", border_style="magenta", box=rich.box.SIMPLE_HEAD)
+    help_table.add_row(left_right_action, up_down_action,
+                    enter_action, space_action, a_action)
+
+    # Wrap the help_table in Align.bottom for vertical alignment
+    help_panel = Panel(
+        Align.center(help_table),
+        title="Help",
+        box=rich.box.SIMPLE_HEAD
+    )
 
     # Header style and text
     header_style = rich.style.Style(color="magenta", italic=True)
@@ -485,28 +568,36 @@ def generate_rich_interface(selection_made):
     if sub_panel is None:
         sub_panel = Panel("Loading...", border_style="dim cyan")
 
+
     # Combine panels into the layout
     layout = Layout()
     layout.split_column(
-        Layout(sub_panel, name="sub_panel", ratio=3),
+        Layout(page_panel, name="page_panel", ratio=1),
+        Layout(sub_panel, name="sub_panel", ratio=4),
         Layout(command_panel, name="command_panel", ratio=1),
-        Layout(help_panel, name="help_panel", ratio=1),
+        Layout(Align.center(help_text, vertical="bottom"), name="help_text", ratio=1),
+        Layout(Align.center(help_panel, vertical="bottom"), name="help_panel", ratio=2),
     )
+
+    if show_help:
+        layout["command_panel"].ratio = 1
+        layout["help_panel"].visible = True
+        layout["help_text"].visible = False
+    else:
+        layout["command_panel"].ratio = 2
+        layout["help_panel"].visible = False
+        layout["help_text"].visible = True
 
     # Main panel containing all sub-panels
     main_panel = Panel(
         layout,
-        title=main_panel_header_text,
         expand=False,
         height=30,
     )
-
     return main_panel
 
-
-
 def interface():
-    global selected, index, page, option_key, directory_index
+    global selected, index, page, option_key, directory_index, selected_panel, option_index, show_help
     commands = load_terminal_commands()
     try:
         console = Console()
@@ -524,17 +615,34 @@ def interface():
                 if not key_queue.empty():
                     key = key_queue.get_nowait()
                     if page == 0:
-                        choices = len(directories)
+                        if selected_panel is None:
+                            choices = 2
+                        elif selected_panel == 0:
+                            choices = len(directories)
+                        elif selected_panel == 1:
+                            choices = len(selected) + 1
                     elif page == 1:
                         choices = len(commands)
                     elif page == 2:
                         choices = len(
                             directories[directory_index]['post_commands'])
 
-                    if key == 'up' and index > 0:
-                        index -= 1
-                    elif key == 'down' and index < choices - 1:
-                        index += 1
+                    if key == 'up':
+                        if selected_panel == 1:
+                            selected_panel = None
+                            option_index = 0
+                            index = 0
+                        else:
+                            if index > 0:
+                                index -= 1
+
+                    elif key == 'down':
+                        if selected_panel == 1:
+                            pass
+                        elif selected_panel == 0 or selected_panel is None:
+                            if index < choices - 1:
+                                index += 1
+
                     elif key == 'enter':  # Quit when "Enter" is pressed
                         if not option_key == "a":
                             flush_input()
@@ -542,11 +650,27 @@ def interface():
                         else:
                             option_key = None
                     elif key == 'right' and page < pages:
-                        if len(selected) > 0:
-                            page += 1
-                    elif key == 'left' and page > 0:
-                        if len(selected) > 0:
-                            page -= 1
+                        if not selected_panel:
+                            if len(selected) > 0:
+                                page += 1
+                        else:
+                            option_index += 1 if option_index < choices - 2 else 0
+                            print(f"option_index: {option_index}")
+                    elif key == 'left' and page >= 0:
+                        if not selected_panel:
+                            if len(selected) > 0:
+                                page -= 1
+                        else:
+                            option_index -= 1 if option_index > 0 else 0
+                            print(f"option_index: {option_index}")
+                    elif key == 'delete':
+                        option_key = "delete"
+                        if selected_panel == 1:
+                            selected.pop(option_index)
+                            option_index -= 1
+                    elif key == 'h':
+                        show_help = not show_help
+
                     elif key == 'a':
                         if page == 2:
                             option_key = "a"
@@ -595,7 +719,6 @@ def interface():
                             console.clear()
                             flush_input()
 
-
                             prompt_message = Panel(
                                 "[bold yellow]Enter your custom command:[/bold yellow]",
                                 title="Custom Command",
@@ -627,8 +750,6 @@ def interface():
                     elif key == 'space':
                         selection_made = True
                         live.update(generate_rich_interface(selection_made))
-                        if page == 0:
-                            directory_index = index
                         index = 0
 
                     if selection_made:
