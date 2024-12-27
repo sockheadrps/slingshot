@@ -22,7 +22,7 @@ import psutil
 import queue
 import msvcrt
 
-base_path = Path("C:/Users/16145/scripts")
+base_path = Path("C:/Users/a123d/scripts/slingshot")
 # Path to storage.json
 STORAGE_PATH = base_path / "slingshot_storage.json"
 
@@ -58,9 +58,9 @@ index = 0
 page = 0
 option_key = False
 directory_index = 0
+selected_panel = None
 
 def flush_input():
-    import msvcrt
     while msvcrt.kbhit():
         msvcrt.getch()
 
@@ -72,15 +72,28 @@ def load_directories():
 
 def save_directories(directories):
     """Save directories to storage."""
+    # Read existing data
+    if Path(STORAGE_PATH).exists():
+        with open(STORAGE_PATH, "r") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}  # Handle empty or invalid JSON
+    else:
+        data = {}
+
+    # Update directories
+    data["directories"] = directories
+
+    # Write updated data back to the file
     with open(STORAGE_PATH, "w") as f:
-        data = json.load(f)
-        data["directories"] = directories
-        json.dump(data, f)
+        json.dump(data, f, indent=4)
 
 
 def load_terminal_commands():
     with open(STORAGE_PATH, "r") as f:
-        return json.load(f)["commands"]
+        data = json.load(f)
+        return data["commands"]
 
 
 def save_terminal_commands(command):
@@ -221,6 +234,7 @@ def listen_for_arrow_keys(key_queue):
 
 
 def generate_directory_list(index, selection_made):
+    global selected_panel
     directories = load_directories()  # Load the list of directories
     selected_style = rich.style.Style(color="cyan")
     unselected_style = rich.style.Style(dim=True)
@@ -234,7 +248,7 @@ def generate_directory_list(index, selection_made):
     # Add rows to the navigation panel
     selected_dir = None
     for i, directory in enumerate(directories):
-        if i == index:  # Highlight the current index
+        if i == index and selected_panel == 0:  
             if selection_made:
                 selected_dir = directory['directory']
             directory_table.add_row(
@@ -249,6 +263,7 @@ def generate_directory_list(index, selection_made):
 
     directory_panel = Panel(
         directory_table,
+        title="Directories",
         box=rich.box.SIMPLE_HEAD,
         border_style="dim",
         expand=True,
@@ -316,111 +331,178 @@ def generate_post_command_panel(index, selection_made):
         show_header=False,
         box=rich.box.ROUNDED,
         border_style="blue",
-        style="bold"
-
+        style="bold",
+        expand=True
     )
 
     # Add rows to the navigation panel
     selected_command = None
-    for i, command in enumerate(commands):
-        if i == index:  # Highlight the current index
-            if selection_made:
-                selected_command = command
-            directory_panel.add_row(
-                rich.text.Text(f"> {command}", style=selected_style)
-            )
-        else:
-            directory_panel.add_row(
-                rich.text.Text(f"  {command}", style=unselected_style)
-            )
+    
+    # Calculate number of columns needed
+    num_commands = len(commands)
+    items_per_column = 8
+    num_columns = (num_commands + items_per_column - 1) // items_per_column
+    
+    # Create list to hold cells for each row
+    for row in range(items_per_column):
+        cells = []
+        for col in range(num_columns):
+            idx = row + (col * items_per_column)
+            if idx < num_commands:
+                command = commands[idx]
+                if idx == index:  # Highlight the current index
+                    if selection_made:
+                        selected_command = command
+                    cells.append(rich.text.Text(f"> {command}", style=selected_style))
+                else:
+                    cells.append(rich.text.Text(f"  {command}", style=unselected_style))
+            else:
+                cells.append(rich.text.Text(""))
+                
+        directory_panel.add_row(*cells)
 
     return directory_panel, selected_command
 
 
+def generate_command_panel():
+    """
+    Generates the command panel.
+
+    Args:
+        selected (list): List of selected items.
+        selected_panel (int): The index of the selected panel.
+        index (int): The active index.
+
+    Returns:
+        rich.Panel: The generated command panel.
+    """
+    global selected, index, page, option_key, selected_panel, index
+    if len(selected) > 0:
+        command_text = Text(
+            f"cd {selected[0]} {' '.join(selected[1:])}",
+            style='green' if index == 0 else 'dim green'
+        )
+        command_panel = Panel(
+            command_text,
+            title="Command Panel",
+            border_style="green" if selected_panel == 1 else "dim green",
+            box=rich.box.SIMPLE_HEAD,
+        )
+    else:
+        if page == 0 and not selected_panel:
+            command_panel = Panel(  
+                "Waiting for selection...",
+                title="Command Panel",
+                border_style="green" if index == 1 else "dim green",
+                box=rich.box.SIMPLE_HEAD,
+            )
+        else:
+            command_panel = Panel(
+                "Waiting for selection...",
+                title="Command Panel",
+                border_style="green",
+                box=rich.box.SIMPLE_HEAD,
+            )
+    return command_panel
+
+
 
 def generate_rich_interface(selection_made):
-    global selected, index, page, option_key
-    # Debugging line to print the value of `page`
+    global selected, index, page, option_key, selected_panel
 
-    # Default sub_panel with border and style
     sub_panel = None
+    command_panel = None
+    print(f"selected_panel: {selected_panel}")
 
+    # Handle page panels
     if page == 0:
-        sub_panel, selected_dir = generate_directory_list(
-            index, selection_made)
+        # Populate the first panel with directories but don't allow interaction until selected
+        sub_panel, _ = generate_directory_list(index, selection_made)
         if selection_made:
-            selected.append(selected_dir)
-            page = 1
+            if selected_panel is None:
+                selected_panel = index
+                index = 0
+                selection_made = False
+        if selected_panel == 0:
+            sub_panel, selected_dir = generate_directory_list(index, selection_made)
+            if selection_made:
+                selected.append(selected_dir)
+                index = 0  # Reset index for the next panel
+                page = 1  # Move to the next page
+        elif selected_panel == 1:
+            command_panel = generate_command_panel()
+
     elif page == 1 and len(selected) > 0:
-        sub_panel, selected_command = generate_post_command_panel(
-            index, selection_made)
+        sub_panel, selected_command = generate_post_command_panel(index, selection_made)
         if selection_made:
             selected.append(selected_command)
+            selected_panel = index
+            index = 0
+
     elif page == 2 and len(selected) > 0:
-        sub_panel, selected_command = generate_final_command_panel(
-            selection_made)
+        sub_panel, selected_command = generate_final_command_panel(selection_made)
         if option_key == "a":
             return
         if selection_made and not option_key == "a":
             selected.append(selected_command)
-            # Show confirmation prompt using Rich's `Prompt`
+            selected_panel = index
+            index = 0
 
-    # Generate the command panel
-    if len(selected) > 0:
-        command_text = Text(f"cd {selected[0]} {
-                            ' '.join(selected[1:])}", style='bold green')
-        command_panel = Panel(
-            command_text,
-            title="Command Panel",
-            border_style="green",
-            box=rich.box.SIMPLE_HEAD,
-        )
-    else:
-        command_panel = Panel(
-            "Waiting for selection...",
-            title="Command Panel",
-            border_style="green",
-            box=rich.box.SIMPLE_HEAD,
-        )
+    # Generate the command panel using the helper function
+    if command_panel is None:
+        command_panel = generate_command_panel()
 
-    # Ensure sub_panel is always set
+    # Help Panel
+    help_command_style = rich.style.Style(color="magenta", underline=True)
+    left_right = Align.center("← →", style=help_command_style)
+    up_down = Align.center("↑ ↓", style=help_command_style)
+    enter = Align.center("Enter", style=help_command_style)
+    space = Align.center("Space", style=help_command_style)
+    a = Align.center("a", style=help_command_style)
+
+    left_right_action = Align.center("Navigate pages")
+    up_down_action = Align.center("Navigate options")
+    enter_action = Align.center("Run command")
+    space_action = Align.center("Select option")
+    a_action = Align.center("Add custom command")
+
+    help_table = Table(
+        show_header=False,
+        show_edge=True,
+        expand=True,
+        box=rich.box.ROUNDED,
+        border_style="magenta",
+    )
+    help_table.add_row(left_right, up_down, enter, space, a)
+    help_table.add_row(left_right_action, up_down_action, enter_action, space_action, a_action)
+    help_panel = Panel(help_table, title="Help", border_style="magenta", box=rich.box.SIMPLE_HEAD)
 
     # Header style and text
     header_style = rich.style.Style(color="magenta", italic=True)
-    main_panel_header_text = rich.text.Text(
-        f"Navigation {page + 1}", style=header_style
-    )
+    main_panel_header_text = Text(f"Navigation {page + 1}", style=header_style)
+
+    # Ensure sub_panel is always set
     if sub_panel is None:
-        layout = Layout()
-        sub_panel = Panel("Loading...")
-        command_panel = Panel("Loading...")
-        layout.split_column(
-            Layout(sub_panel, name="sub_panel", ratio=2),
-            Layout(command_panel, name="command_panel", ratio=1),
-        )
-        main_panel = Panel(
-            layout,
-            title=main_panel_header_text,
-            expand=False,
-            height=25,
-        )
-        return main_panel
+        sub_panel = Panel("Loading...", border_style="dim cyan")
 
-    else:
-        layout = Layout()
-        layout.split_column(
-            Layout(sub_panel, name="sub_panel", ratio=3),
-            Layout(command_panel, name="command_panel", ratio=1),
-        )
+    # Combine panels into the layout
+    layout = Layout()
+    layout.split_column(
+        Layout(sub_panel, name="sub_panel", ratio=3),
+        Layout(command_panel, name="command_panel", ratio=1),
+        Layout(help_panel, name="help_panel", ratio=1),
+    )
 
-        # Main panel containing both sub-panel and command panel
-        main_panel = Panel(
-            layout,
-            title=main_panel_header_text,
-            expand=False,
-            height=25,
-        )
-        return main_panel
+    # Main panel containing all sub-panels
+    main_panel = Panel(
+        layout,
+        title=main_panel_header_text,
+        expand=False,
+        height=30,
+    )
+
+    return main_panel
+
 
 
 def interface():

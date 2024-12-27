@@ -1,0 +1,38 @@
+{
+    "directories": [
+        {
+            "directory": "C:\\Users\\a123d\\scripts\\slingshot",
+            "post_commands": [
+                "python"
+            ]
+        },
+        {
+            "directory": "C:\\Users\\a123d\\code",
+            "post_commands": [
+                "pwd"
+            ]
+        }
+    ],
+    "commands": [
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd",
+        "pwd"
+    ]
+}
